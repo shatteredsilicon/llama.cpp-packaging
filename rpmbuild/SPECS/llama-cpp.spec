@@ -55,6 +55,18 @@ export CUDA_HOME=%{cuda_home}
 export PATH=%{cuda_home}/bin:$PATH
 export LD_LIBRARY_PATH=%{cuda_home}/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
+# mock has the CUDA toolkit, but not the real NVIDIA driver library.
+# The CUDA toolkit provides a build-time libcuda stub, but some link steps
+# need to resolve the SONAME libcuda.so.1 from libggml-cuda.so.
+# Create a local build-only libcuda.so.1 symlink to the toolkit stub and
+# expose it via -rpath-link. This is not installed into the RPM.
+cuda_stub_dir="$PWD/cuda-stubs"
+mkdir -p "$cuda_stub_dir"
+ln -sf "%{cuda_home}/lib64/stubs/libcuda.so" "$cuda_stub_dir/libcuda.so.1"
+export LIBRARY_PATH="$cuda_stub_dir:%{cuda_home}/lib64/stubs${LIBRARY_PATH:+:$LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$cuda_stub_dir:%{cuda_home}/lib64/stubs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LDFLAGS="${LDFLAGS:-} -Wl,-rpath-link,$cuda_stub_dir -Wl,-rpath-link,%{cuda_home}/lib64/stubs"
+
 mkdir -p build
 rm -rf build/*
 
@@ -67,6 +79,8 @@ cmake -B build \
   -DGGML_RPC=ON \
   -DCMAKE_INSTALL_PREFIX=%{_prefix} \
   -DCMAKE_INSTALL_LIBDIR=%{_lib} \
+  -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS" \
+  -DCMAKE_SHARED_LINKER_FLAGS="$LDFLAGS" \
   -DLLAMA_BUILD_EXAMPLES=OFF \
   -DLLAMA_BUILD_TESTS=OFF
 

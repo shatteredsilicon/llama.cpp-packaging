@@ -6,6 +6,9 @@
 
 %global cuda_arches 75;80;86;89;90;90a;120
 
+# Do not generate debuginfo/debugsource subpackages.
+%global debug_package %{nil}
+
 %{!?upstream_version:%{error:upstream_version must be defined, e.g. rpmbuild --define 'upstream_version b8064'}}
 
 Summary:        LLM inference in C/C++

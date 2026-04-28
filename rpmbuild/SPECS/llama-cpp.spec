@@ -9,6 +9,13 @@
 # Do not generate debuginfo/debugsource subpackages.
 %global debug_package %{nil}
 
+%bcond_with test
+%if %{with test}
+%global build_test ON
+%else
+%global build_test OFF
+%endif
+
 %{!?upstream_version:%{error:upstream_version must be defined, e.g. rpmbuild --define 'upstream_version b8064'}}
 
 Summary:        LLM inference in C/C++
@@ -50,6 +57,15 @@ range of hardware - locally and in the cloud.
 
 The llama.cpp project is the main playground for developing new features for the ggml library.
 
+%if %{with test}
+%package test
+Summary:        Tests for %{name}
+Requires:       %{name}%{?_isa} = %{version}-%{release}
+
+%description test
+Test binaries for %{name}.
+%endif
+
 %prep
 %autosetup -p1 -n %{name}-%{upstream_version}
 
@@ -85,7 +101,7 @@ cmake -B build \
   -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS" \
   -DCMAKE_SHARED_LINKER_FLAGS="$LDFLAGS" \
   -DLLAMA_BUILD_EXAMPLES=OFF \
-  -DLLAMA_BUILD_TESTS=OFF
+  -DLLAMA_BUILD_TESTS=%{build_test}
 
 cd build
 cmake --build . -j --config Release
@@ -109,5 +125,13 @@ rm -rf %{buildroot}%{_libdir}/pkgconfig
 
 # Keep every installed executable.
 %{_bindir}/*
+%if %{with test}
+%exclude %{_bindir}/test-*
+%endif
+
+%if %{with test}
+%files test
+%{_bindir}/test-*
+%endif
 
 %changelog

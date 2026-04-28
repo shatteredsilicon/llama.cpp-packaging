@@ -9,6 +9,9 @@
 # Do not generate debuginfo/debugsource subpackages.
 %global debug_package %{nil}
 
+# Do not generate /usr/lib/.build-id links.
+%global _build_id_links none
+
 %bcond_with test
 %if %{with test}
 %global build_test ON

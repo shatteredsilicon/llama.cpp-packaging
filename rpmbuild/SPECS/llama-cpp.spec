@@ -6,6 +6,19 @@
 
 %global cuda_arches 75;80;86;89;90;90a;120
 
+# Do not generate debuginfo/debugsource subpackages.
+%global debug_package %{nil}
+
+# Do not generate /usr/lib/.build-id links.
+%global _build_id_links none
+
+%bcond_with test
+%if %{with test}
+%global build_test ON
+%else
+%global build_test OFF
+%endif
+
 %{!?upstream_version:%{error:upstream_version must be defined, e.g. rpmbuild --define 'upstream_version b8064'}}
 
 Summary:        LLM inference in C/C++
@@ -30,7 +43,7 @@ BuildRequires:  cuda-toolkit-12-9
 BuildRequires:  cuda-toolkit-13-1
 %endif
 
-Requires:       nvidia-driver-cuda-libs libcublas cuda-cudart cuda-libraries
+Requires:       nvidia-driver-cuda-libs libcublas cuda-cudart
 
 
 %description
@@ -47,6 +60,15 @@ range of hardware - locally and in the cloud.
 
 The llama.cpp project is the main playground for developing new features for the ggml library.
 
+%if %{with test}
+%package test
+Summary:        Tests for %{name}
+Requires:       %{name}%{?_isa} = %{version}-%{release}
+
+%description test
+Test binaries for %{name}.
+%endif
+
 %prep
 %autosetup -p1 -n %{name}-%{upstream_version}
 
@@ -54,6 +76,18 @@ The llama.cpp project is the main playground for developing new features for the
 export CUDA_HOME=%{cuda_home}
 export PATH=%{cuda_home}/bin:$PATH
 export LD_LIBRARY_PATH=%{cuda_home}/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+
+# mock has the CUDA toolkit, but not the real NVIDIA driver library.
+# The CUDA toolkit provides a build-time libcuda stub, but some link steps
+# need to resolve the SONAME libcuda.so.1 from libggml-cuda.so.
+# Create a local build-only libcuda.so.1 symlink to the toolkit stub and
+# expose it via -rpath-link. This is not installed into the RPM.
+cuda_stub_dir="$PWD/cuda-stubs"
+mkdir -p "$cuda_stub_dir"
+ln -sf "%{cuda_home}/lib64/stubs/libcuda.so" "$cuda_stub_dir/libcuda.so.1"
+export LIBRARY_PATH="$cuda_stub_dir:%{cuda_home}/lib64/stubs${LIBRARY_PATH:+:$LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$cuda_stub_dir:%{cuda_home}/lib64/stubs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LDFLAGS="${LDFLAGS:-} -Wl,-rpath-link,$cuda_stub_dir -Wl,-rpath-link,%{cuda_home}/lib64/stubs"
 
 mkdir -p build
 rm -rf build/*
@@ -67,8 +101,10 @@ cmake -B build \
   -DGGML_RPC=ON \
   -DCMAKE_INSTALL_PREFIX=%{_prefix} \
   -DCMAKE_INSTALL_LIBDIR=%{_lib} \
+  -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS" \
+  -DCMAKE_SHARED_LINKER_FLAGS="$LDFLAGS" \
   -DLLAMA_BUILD_EXAMPLES=OFF \
-  -DLLAMA_BUILD_TESTS=OFF
+  -DLLAMA_BUILD_TESTS=%{build_test}
 
 cd build
 cmake --build . -j --config Release
@@ -92,5 +128,13 @@ rm -rf %{buildroot}%{_libdir}/pkgconfig
 
 # Keep every installed executable.
 %{_bindir}/*
+%if %{with test}
+%exclude %{_bindir}/test-*
+%endif
+
+%if %{with test}
+%files test
+%{_bindir}/test-*
+%endif
 
 %changelog

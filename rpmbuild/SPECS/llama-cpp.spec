@@ -77,6 +77,13 @@ export CUDA_HOME=%{cuda_home}
 export PATH=%{cuda_home}/bin:$PATH
 export LD_LIBRARY_PATH=%{cuda_home}/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
+# AlmaLinux/RHEL RPM builds link executables with hardened PIE defaults.
+# With CUDA 13, CMake's CUDA compiler probe can fail at link time unless
+# nvcc forwards PIC-compatible host flags explicitly.
+# Pass -fPIC through nvcc to the host compiler so CUDA try-compile and
+# normal object builds are compatible with the hardened linker setup.
+export CUDAFLAGS="${CUDAFLAGS:+$CUDAFLAGS }-Xcompiler=-fPIC"
+
 # mock has the CUDA toolkit, but not the real NVIDIA driver library.
 # The CUDA toolkit provides a build-time libcuda stub, but some link steps
 # need to resolve the SONAME libcuda.so.1 from libggml-cuda.so.
@@ -95,6 +102,7 @@ rm -rf build/*
 cmake -B build \
   -DGGML_CUDA=ON \
   -DGGML_NATIVE=OFF \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_CUDA_ARCHITECTURES="%{cuda_arches}" \
   -DCMAKE_CUDA_COMPILER=%{cuda_home}/bin/nvcc \
   -DGGML_CUDA_FA_ALL_QUANTS=ON \

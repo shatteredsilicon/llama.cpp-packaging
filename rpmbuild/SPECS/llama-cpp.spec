@@ -94,7 +94,14 @@ mkdir -p "$cuda_stub_dir"
 ln -sf "%{cuda_home}/lib64/stubs/libcuda.so" "$cuda_stub_dir/libcuda.so.1"
 export LIBRARY_PATH="$cuda_stub_dir:%{cuda_home}/lib64/stubs${LIBRARY_PATH:+:$LIBRARY_PATH}"
 export LD_LIBRARY_PATH="$cuda_stub_dir:%{cuda_home}/lib64/stubs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export LDFLAGS="${LDFLAGS:-} -Wl,-rpath-link,$cuda_stub_dir -Wl,-rpath-link,%{cuda_home}/lib64/stubs"
+
+# Split functions/data into separate sections, then let the linker remove
+# unused sections and emit stripped ELF binaries directly.  This avoids a
+# separate strip pass, which can fail on EL9 with newer ELF sections such as
+# .relr.dyn.
+export CFLAGS="${CFLAGS:-} -ffunction-sections -fdata-sections"
+export CXXFLAGS="${CXXFLAGS:-} -ffunction-sections -fdata-sections"
+export LDFLAGS="${LDFLAGS:-} -Wl,--gc-sections -Wl,--strip-all -Wl,-rpath-link,$cuda_stub_dir -Wl,-rpath-link,%{cuda_home}/lib64/stubs"
 
 mkdir -p build
 rm -rf build/*
@@ -105,6 +112,7 @@ cmake -B build \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_CUDA_ARCHITECTURES="%{cuda_arches}" \
   -DCMAKE_CUDA_COMPILER=%{cuda_home}/bin/nvcc \
+  -DCMAKE_BUILD_TYPE=Release \
   -DGGML_CUDA_FA_ALL_QUANTS=ON \
   -DGGML_RPC=ON \
   -DCMAKE_INSTALL_PREFIX=%{_prefix} \

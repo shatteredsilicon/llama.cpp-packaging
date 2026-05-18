@@ -29,6 +29,7 @@ Release:        1%{?dist}
 
 URL:            https://github.com/ggml-org/llama.cpp
 Source0:        %{name}-%{upstream_version}.tar.gz
+Patch0:         tp-fix-ctx-size.patch
 
 BuildRequires:  cmake >= 3.14
 BuildRequires:  gcc-c++

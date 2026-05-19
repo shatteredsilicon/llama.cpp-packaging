@@ -121,7 +121,8 @@ cmake -B build \
   -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS" \
   -DCMAKE_SHARED_LINKER_FLAGS="$LDFLAGS" \
   -DLLAMA_BUILD_EXAMPLES=OFF \
-  -DLLAMA_BUILD_TESTS=%{build_test}
+  -DLLAMA_BUILD_TESTS=%{build_test} \
+  -DLLAMA_BUILD_UI=OFF
 
 cd build
 cmake --build . -j --config Release

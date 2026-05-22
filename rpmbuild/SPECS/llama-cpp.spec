@@ -30,11 +30,13 @@ Release:        1%{?dist}
 URL:            https://github.com/ggml-org/llama.cpp
 Source0:        %{name}-%{upstream_version}.tar.gz
 Patch0:         tp-fix-ctx-size.patch
+Patch1:         split-mode-tensor-kv-quant-enable.patch
 
 BuildRequires:  cmake >= 3.14
 BuildRequires:  gcc-c++
 BuildRequires:  libcurl-devel
 BuildRequires:  openssl-devel
+BuildRequires:  libnccl-devel
 
 # CUDA toolkit / nvcc.
 # Adjust the package name if your CUDA repository uses different names.
@@ -109,6 +111,7 @@ rm -rf build/*
 
 cmake -B build \
   -DGGML_CUDA=ON \
+  -DGGML_CUDA_NCCL=ON \
   -DGGML_NATIVE=OFF \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_CUDA_ARCHITECTURES="%{cuda_arches}" \

@@ -46,7 +46,7 @@ BuildRequires:  cuda-toolkit-12-9
 BuildRequires:  cuda-toolkit-13-1
 %endif
 
-Requires:       nvidia-driver-cuda-libs libcublas cuda-cudart
+Requires:       nvidia-driver-cuda-libs libcublas cuda-cudart libnccl
 
 
 %description

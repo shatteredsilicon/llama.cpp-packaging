@@ -1,5 +1,5 @@
 diff --git a/ggml/src/ggml-backend-meta.cpp b/ggml/src/ggml-backend-meta.cpp
-index fdd3dbfd7..06e546c8f 100644
+index d0d64523b..182ac5572 100644
 --- a/ggml/src/ggml-backend-meta.cpp
 +++ b/ggml/src/ggml-backend-meta.cpp
 @@ -584,6 +584,15 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(

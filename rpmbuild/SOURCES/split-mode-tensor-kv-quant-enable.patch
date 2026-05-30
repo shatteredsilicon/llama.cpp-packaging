@@ -306,7 +306,7 @@ index ac11f96c2..823191477 100644
      ggml_mul_mat_set_hint(res, GGML_HINT_SRC0_IS_HADAMARD);
      res = ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index a8323c8fb..712d83893 100644
+index 914fc423b..1fb7970e3 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -407,7 +407,63 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
@@ -372,4 +372,4 @@ index a8323c8fb..712d83893 100644
 +
          // standard attention
          if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_kv_weight)) {
-             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight");
+             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight", "ssm_out.weight");

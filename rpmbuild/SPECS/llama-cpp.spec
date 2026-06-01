@@ -29,7 +29,6 @@ Release:        1%{?dist}
 
 URL:            https://github.com/ggml-org/llama.cpp
 Source0:        %{name}-%{upstream_version}.tar.gz
-Patch0:         split-mode-tensor-kv-quant-enable.patch
 
 BuildRequires:  cmake >= 3.14
 BuildRequires:  gcc-c++

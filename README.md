@@ -2,6 +2,27 @@
 
 Package `llama.cpp`
 
+## Repository layout
+
+~~~~ {.text}
+llama.cpp-packaging/
+├── README.md
+├── Jenkinsfile.watcher
+├── Jenkinsfile.build
+├── keys/
+│   └── RPM-GPG-KEY-llama-cpp.pub
+└── rpmbuild/
+    ├── SOURCES/
+    │   └── prep-llama-cpp.sh
+    └── SPECS/
+        ├── cuda-virtual-provides.spec
+        └── llama-cpp.spec
+~~~~
+
+The non-secret RPM public key is stored in this repository for package signing
+verification and publication. The private signing key and passphrase remain
+protected by Jenkins credentials.
+
 # Build
 
 ~~~~ {.bash}

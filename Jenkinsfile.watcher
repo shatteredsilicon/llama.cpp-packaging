@@ -1,0 +1,142 @@
+/* groovylint-disable LineLength */
+
+@Library('shatteredsilicon') _
+
+pipeline {
+  agent {
+    label 'rpm-x86_64'
+  }
+
+  parameters {
+    choice(name: 'EPEL', choices: ['10', '9', '8'], description: 'EPEL release version')
+    choice(name: 'ARCH', choices: ['x86_64'], description: 'Target architecture')
+  }
+
+  triggers {
+    cron('H H/2 * * *')
+  }
+
+  environment {
+    LLAMA_CPP_BUILD_JOB = 'llama-cpp/build-llama-cpp-rpm'
+    RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID = 'rpm-package-server-target'
+    SLACK_WEBHOOK_CREDENTIALS_ID = 'slack-webhook-url'
+    SLACK_BOT_TOKEN_CREDENTIALS_ID = 'slack-bot-token'
+    SLACK_CHANNEL_ID_CREDENTIALS_ID = 'slack-channel-id'
+  }
+
+  options {
+    buildDiscarder(logRotator(
+      numToKeepStr: '20',
+      artifactNumToKeepStr: '20'
+    ))
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+    timestamps()
+  }
+
+  stages {
+    stage('Check latest release') {
+      steps {
+        script {
+          org.shatteredsilicon.jenkins.model.BuildTarget target = rpm.resolveTarget(
+            release: params.EPEL ?: '10',
+            arch: params.ARCH ?: 'x86_64',
+            supportedReleases: ['8', '9', '10'],
+            supportedArches: ['x86_64'],
+            mockTarget: "alma+epel+cuda-${params.EPEL ?: '10'}-${params.ARCH ?: 'x86_64'}"
+          )
+
+          Map<String, String> externalConfiguration = [
+            LLAMA_CPP_BUILD_JOB: env.LLAMA_CPP_BUILD_JOB,
+            RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID: env.RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID,
+            SLACK_WEBHOOK_CREDENTIALS_ID: env.SLACK_WEBHOOK_CREDENTIALS_ID,
+            SLACK_BOT_TOKEN_CREDENTIALS_ID: env.SLACK_BOT_TOKEN_CREDENTIALS_ID,
+            SLACK_CHANNEL_ID_CREDENTIALS_ID: env.SLACK_CHANNEL_ID_CREDENTIALS_ID
+          ]
+          ci.validateRequiredParameters(externalConfiguration, externalConfiguration.keySet())
+
+          org.shatteredsilicon.jenkins.model.RpmWatcherResult result = rpmWatcher(
+            pipelineName: 'llama-cpp RPM pipeline',
+            architecture: target.arch,
+            name: 'llama-cpp',
+            supportedArches: ['x86_64'],
+            release: [
+              provider: 'github',
+              repository: 'ggml-org/llama.cpp'
+            ],
+            repository: [
+              targetCredentialsId: externalConfiguration.RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID,
+              remoteDirectory: "llama-cpp/${target.release}/RPMS/${target.arch}",
+              packageName: 'llama-cpp',
+              architecture: target.arch
+            ],
+            builds: [
+              [
+                job: externalConfiguration.LLAMA_CPP_BUILD_JOB,
+                versionParameter: 'UPSTREAM_TAG',
+                threadParameter: 'THREAD_TS',
+                parameters: [
+                  EPEL: target.release,
+                  ARCH: target.arch,
+                  WITH_TEST: false
+                ],
+                wait: false
+              ]
+            ],
+            notification: [
+              enabled: false
+            ]
+          )
+
+          if (target.release == '10') {
+            result.rebuilds.each { Map<String, Object> rebuild ->
+              dailyDigest.record(
+                targetCredentialsId: externalConfiguration.RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID,
+                namespace: 'llama-cpp',
+                productName: 'llama-cpp',
+                event: [
+                  type: 'detected',
+                  version: rebuild.upstreamVersion,
+                  packagedVersion: rebuild.packagedVersion,
+                  release: target.release,
+                  architecture: target.arch,
+                  buildUrl: env.BUILD_URL
+                ]
+              )
+            }
+          }
+
+          echo "llama-cpp watcher result for EPEL ${target.release} / ${target.arch}: rebuilds=${result.rebuilds.size()}, current=${result.current.size()}, skipped=${result.skipped.size()}, triggered=${result.triggeredBuilds.size()}"
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      script {
+        String releasever = (params.EPEL ?: 'unknown').trim()
+        Map<String, String> slackCredentialIds = [
+          webhookCredentialsId: (env.SLACK_WEBHOOK_CREDENTIALS_ID ?: '').trim(),
+          botTokenCredentialsId: (env.SLACK_BOT_TOKEN_CREDENTIALS_ID ?: '').trim(),
+          channelIdCredentialsId: (env.SLACK_CHANNEL_ID_CREDENTIALS_ID ?: '').trim()
+        ]
+
+        if (releasever == '10' &&
+            slackCredentialIds.values().every { String value -> value }) {
+          slackNotify(
+            status: 'error',
+            message: "llama-cpp watcher failed for EPEL ${releasever} / ${params.ARCH}. Check Jenkins build: ${env.BUILD_URL}",
+            pipelineName: 'llama-cpp RPM pipeline',
+            webhookCredentialsId: slackCredentialIds.webhookCredentialsId,
+            botTokenCredentialsId: slackCredentialIds.botTokenCredentialsId,
+            channelIdCredentialsId: slackCredentialIds.channelIdCredentialsId,
+            returnStdout: false
+          )
+        } else if (releasever == '10') {
+          echo 'Slack failure notification skipped because credential IDs are not configured.'
+        }
+      }
+    }
+  }
+}

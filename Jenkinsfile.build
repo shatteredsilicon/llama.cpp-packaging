@@ -1,0 +1,318 @@
+/* groovylint-disable LineLength, NestedBlockDepth */
+
+@Library('shatteredsilicon') _
+
+pipeline {
+  agent {
+    label 'rpm-x86_64'
+  }
+
+  parameters {
+    string(name: 'UPSTREAM_TAG', description: 'Upstream llama.cpp tag, e.g. b8922')
+    choice(name: 'EPEL', choices: ['10', '9', '8'], description: 'EPEL release version')
+    choice(name: 'ARCH', choices: ['x86_64'], description: 'Target architecture')
+    booleanParam(name: 'WITH_TEST', defaultValue: false, description: 'Build the llama-cpp-test subpackage')
+    string(name: 'THREAD_TS', defaultValue: '', description: 'Optional Slack parent thread timestamp for failure notifications')
+  }
+
+  environment {
+    RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID = 'rpm-package-server-target'
+    RPM_SIGNING_PRIVATE_KEY_CREDENTIALS_ID = 'rpm-signing-key-llama-cpp'
+    RPM_SIGNING_PASSPHRASE_CREDENTIALS_ID = 'rpm-signing-passphrase-llama-cpp'
+    RPM_SIGNING_PUBLIC_KEY = 'keys/RPM-GPG-KEY-llama-cpp.pub'
+    SLACK_WEBHOOK_CREDENTIALS_ID = 'slack-webhook-url'
+    SLACK_BOT_TOKEN_CREDENTIALS_ID = 'slack-bot-token'
+    SLACK_CHANNEL_ID_CREDENTIALS_ID = 'slack-channel-id'
+  }
+
+  options {
+    buildDiscarder(logRotator(
+      numToKeepStr: '20',
+      artifactNumToKeepStr: '20'
+    ))
+    disableConcurrentBuilds()
+    timestamps()
+  }
+
+  stages {
+    stage('Initialize') {
+      steps {
+        script {
+          ci.validateRequiredParameters(
+            [UPSTREAM_TAG: params.UPSTREAM_TAG],
+            ['UPSTREAM_TAG']
+          )
+
+          String releaseTag = params.UPSTREAM_TAG.trim().replaceFirst(/^v/, '')
+          if (!(releaseTag ==~ /[A-Za-z0-9][A-Za-z0-9._+~]*/)) {
+            error("UPSTREAM_TAG resolved to an invalid RPM version: '${releaseTag}'")
+          }
+
+          org.shatteredsilicon.jenkins.model.BuildTarget target = rpm.resolveTarget(
+            release: params.EPEL ?: '10',
+            arch: params.ARCH ?: 'x86_64',
+            supportedReleases: ['8', '9', '10'],
+            supportedArches: ['x86_64'],
+            mockTarget: "alma+epel+cuda-${params.EPEL ?: '10'}-${params.ARCH ?: 'x86_64'}"
+          )
+
+          Map<String, String> externalConfiguration = [
+            RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID: env.RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID,
+            RPM_SIGNING_PRIVATE_KEY_CREDENTIALS_ID: env.RPM_SIGNING_PRIVATE_KEY_CREDENTIALS_ID,
+            RPM_SIGNING_PASSPHRASE_CREDENTIALS_ID: env.RPM_SIGNING_PASSPHRASE_CREDENTIALS_ID,
+            RPM_SIGNING_PUBLIC_KEY: env.RPM_SIGNING_PUBLIC_KEY,
+            SLACK_WEBHOOK_CREDENTIALS_ID: env.SLACK_WEBHOOK_CREDENTIALS_ID,
+            SLACK_BOT_TOKEN_CREDENTIALS_ID: env.SLACK_BOT_TOKEN_CREDENTIALS_ID,
+            SLACK_CHANNEL_ID_CREDENTIALS_ID: env.SLACK_CHANNEL_ID_CREDENTIALS_ID
+          ]
+          ci.validateRequiredParameters(externalConfiguration, externalConfiguration.keySet())
+
+          env.RELEASE_TAG = releaseTag
+          env.RELEASEVER = target.release
+          env.BASEARCH = target.arch
+          env.MOCK_TARGET_NAME = target.mockTarget
+          env.WITH_TEST_VALUE = params.WITH_TEST ? 'true' : 'false'
+        }
+        echo "Using upstream llama.cpp tag: ${env.RELEASE_TAG}"
+        echo "Using EPEL release: ${env.RELEASEVER}"
+        echo "Using architecture: ${env.BASEARCH}"
+        echo "Using Mock target: ${env.MOCK_TARGET_NAME}"
+        echo "Build test package: ${env.WITH_TEST_VALUE}"
+      }
+    }
+
+    stage('Validate build node') {
+      steps {
+        script {
+          ci.validateBuildNode(
+            expectedArchitecture: env.BASEARCH,
+            requiredCommands: [
+              'gpg',
+              'jq',
+              'mock',
+              'python3',
+              'rpm',
+              'rpmkeys',
+              'rpmbuild',
+              'rpmsign',
+              'scp',
+              'ssh',
+              'tar',
+              'wget'
+            ],
+            mockTarget: env.MOCK_TARGET_NAME
+          )
+        }
+      }
+    }
+
+    stage('Prepare workspace') {
+      steps {
+        script {
+          ci.prepareWorkspace(
+            clean: ['work', 'artifacts'],
+            create: ['work', 'artifacts']
+          )
+        }
+        sh(
+          script: '''
+            set -euo pipefail
+            test -s "$RPM_SIGNING_PUBLIC_KEY"
+            cp -a rpmbuild work/rpmbuild
+          '''
+        )
+      }
+    }
+
+    stage('Prepare source') {
+      steps {
+        sh(
+          script: '''
+            set -euo pipefail
+            cd work/rpmbuild/SOURCES
+            chmod +x prep-llama-cpp.sh
+            ./prep-llama-cpp.sh "$RELEASE_TAG"
+          '''
+        )
+      }
+    }
+
+    stage('Build source RPM') {
+      steps {
+        script {
+          rpm.updateSpec(
+            specFile: 'work/rpmbuild/SPECS/llama-cpp.spec',
+            version: env.RELEASE_TAG,
+            versionMacro: 'upstream_version',
+            preserveVersionField: true
+          )
+        }
+
+        sh(
+          script: '''
+            set -euo pipefail
+            mkdir -p work/rpmbuild/BUILD work/rpmbuild/BUILDROOT work/rpmbuild/RPMS work/rpmbuild/SRPMS
+
+            rpmbuild -bs \
+              --define "_topdir $WORKSPACE/work/rpmbuild" \
+              --define "rhel $RELEASEVER" \
+              --define "dist .el$RELEASEVER" \
+              work/rpmbuild/SPECS/llama-cpp.spec
+
+            find work/rpmbuild/SRPMS -maxdepth 1 -type f \
+              -name "llama-cpp-$RELEASE_TAG-*.src.rpm" \
+              -print -quit | grep -q .
+          '''
+        )
+      }
+    }
+
+    stage('Build RPM with Mock') {
+      steps {
+        script {
+          List<String> requiredArtifactPatterns = [
+            "llama-cpp-${env.RELEASE_TAG}-*.${env.BASEARCH}.rpm",
+            "llama-cpp-${env.RELEASE_TAG}-*.src.rpm"
+          ]
+          if (params.WITH_TEST) {
+            requiredArtifactPatterns.add(
+              "llama-cpp-test-${env.RELEASE_TAG}-*.${env.BASEARCH}.rpm"
+            )
+          }
+
+          rpm.mockBuild(
+            mockTarget: env.MOCK_TARGET_NAME,
+            sourceRpm: "work/rpmbuild/SRPMS/llama-cpp-${env.RELEASE_TAG}-*.src.rpm",
+            artifactDirectory: 'artifacts',
+            rpmbuildOptions: params.WITH_TEST
+              ? ['--with', 'test']
+              : ['--without', 'test'],
+            artifactPatterns: [
+              "llama-cpp*-${env.RELEASE_TAG}-*.rpm",
+              '*.log',
+              '*.cfg',
+              '*.state'
+            ],
+            requiredArtifactPatterns: requiredArtifactPatterns
+          )
+        }
+      }
+    }
+
+    stage('Sign RPMs') {
+      steps {
+        script {
+          rpm.sign(
+            artifactsDirectory: 'artifacts',
+            privateKeyCredentialsId: env.RPM_SIGNING_PRIVATE_KEY_CREDENTIALS_ID,
+            passphraseCredentialsId: env.RPM_SIGNING_PASSPHRASE_CREDENTIALS_ID,
+            publicKeyFile: env.RPM_SIGNING_PUBLIC_KEY
+          )
+        }
+      }
+    }
+
+    stage('Publish RPMs') {
+      steps {
+        script {
+          rpm.publish(
+            targetCredentialsId: env.RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID,
+            artifactsDirectory: 'artifacts',
+            destinations: [
+              [
+                include: '*.src.rpm',
+                remoteDirectory: "llama-cpp/${env.RELEASEVER}/SRPMS"
+              ],
+              [
+                include: '*.rpm',
+                exclude: ['*.src.rpm'],
+                remoteDirectory: "llama-cpp/${env.RELEASEVER}/RPMS/${env.BASEARCH}",
+                refreshMetadata: true
+              ]
+            ],
+            publicKey: [
+              file: env.RPM_SIGNING_PUBLIC_KEY,
+              remoteDirectory: 'llama-cpp'
+            ]
+          )
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      script {
+        ci.archiveDiagnostics(
+          directory: 'artifacts',
+          include: ['**/*'],
+          exclude: ['**/*.rpm'],
+          allowEmpty: true,
+          fingerprint: true
+        )
+
+        if (env.RELEASEVER == '10') {
+          dailyDigest.record(
+            targetCredentialsId: env.RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID,
+            namespace: 'llama-cpp',
+            productName: 'llama-cpp',
+            event: [
+              type: 'built',
+              version: env.RELEASE_TAG,
+              release: env.RELEASEVER,
+              architecture: env.BASEARCH,
+              buildUrl: env.BUILD_URL
+            ]
+          )
+        }
+      }
+    }
+
+    failure {
+      script {
+        ci.archiveDiagnostics(
+          directory: 'artifacts',
+          include: ['**/*'],
+          exclude: ['**/*.rpm'],
+          allowEmpty: true,
+          fingerprint: true
+        )
+
+        String releaseTag = (env.RELEASE_TAG ?: params.UPSTREAM_TAG ?: 'unknown').trim()
+        String releasever = (env.RELEASEVER ?: params.EPEL ?: 'unknown').trim()
+        String basearch = (env.BASEARCH ?: params.ARCH ?: 'unknown').trim()
+        String mockTarget = (env.MOCK_TARGET_NAME ?: "alma+epel+cuda-${releasever}-${basearch}").trim()
+        String testLabel = (env.WITH_TEST_VALUE ?: 'false') == 'true'
+          ? 'with test package'
+          : 'without test package'
+        Map<String, String> slackCredentialIds = [
+          webhookCredentialsId: (env.SLACK_WEBHOOK_CREDENTIALS_ID ?: '').trim(),
+          botTokenCredentialsId: (env.SLACK_BOT_TOKEN_CREDENTIALS_ID ?: '').trim(),
+          channelIdCredentialsId: (env.SLACK_CHANNEL_ID_CREDENTIALS_ID ?: '').trim()
+        ]
+
+        if (releasever == '10' &&
+            slackCredentialIds.values().every { String value -> value }) {
+          slackNotify(
+            status: 'failure',
+            message: "Build failed for llama-cpp ${releaseTag} for EPEL ${releasever} / ${basearch} ${testLabel} using Mock target ${mockTarget}. Check Jenkins build: ${env.BUILD_URL}",
+            pipelineName: 'llama-cpp RPM pipeline',
+            threadTs: params.THREAD_TS,
+            webhookCredentialsId: slackCredentialIds.webhookCredentialsId,
+            botTokenCredentialsId: slackCredentialIds.botTokenCredentialsId,
+            channelIdCredentialsId: slackCredentialIds.channelIdCredentialsId,
+            returnStdout: false
+          )
+        } else if (releasever == '10') {
+          echo 'Slack failure notification skipped because credential IDs are not configured.'
+        }
+      }
+    }
+
+    cleanup {
+      script {
+        ci.cleanup(directories: ['work', 'artifacts'])
+      }
+    }
+  }
+}

@@ -62,13 +62,16 @@ pipeline {
             supportedArches: ['x86_64'],
             release: [
               provider: 'github',
-              repository: 'ggml-org/llama.cpp'
+              repository: 'ggml-org/llama.cpp',
+              tagPrefix: 'v',
+              tagPattern: '^v[0-9]+[.][0-9]+[.][0-9]+$'
             ],
             repository: [
               targetCredentialsId: externalConfiguration.RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID,
               remoteDirectory: "llama-cpp/${target.release}/RPMS/${target.arch}",
               packageName: 'llama-cpp',
-              architecture: target.arch
+              architecture: target.arch,
+              includeGlob: 'llama-cpp-[0-9]*.rpm'
             ],
             builds: [
               [

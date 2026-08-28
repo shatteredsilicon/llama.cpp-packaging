@@ -22,15 +22,20 @@ fi
 
 cd "$script_dir"
 
-archive_url="https://github.com/ggml-org/llama.cpp/archive/refs/tags/${VERSION}.tar.gz"
-download_tar="${VERSION}.tar.gz"
+UPSTREAM_TAG="$VERSION"
+if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  UPSTREAM_TAG="v${VERSION}"
+fi
+
+archive_url="https://github.com/ggml-org/llama.cpp/archive/refs/tags/${UPSTREAM_TAG}.tar.gz"
+download_tar="${UPSTREAM_TAG}.tar.gz"
 source_dir="llama-cpp-${VERSION}"
 output_tar="${source_dir}.tar.gz"
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-echo "Downloading llama.cpp ${VERSION}"
+echo "Downloading llama.cpp ${UPSTREAM_TAG} for RPM version ${VERSION}"
 wget -O "$tmpdir/$download_tar" "$archive_url"
 
 tar -zxf "$tmpdir/$download_tar" -C "$tmpdir"

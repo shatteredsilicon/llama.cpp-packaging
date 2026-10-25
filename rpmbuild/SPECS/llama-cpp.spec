@@ -1,10 +1,8 @@
-%if 0%{?rhel} <= 9
+# Use the last CUDA 12 minor release across EL8/EL9/EL10.
+# CUDA 12.9 supports sm_61, sm_70 and sm_75; CUDA 13 drops sm_61/sm_70.
 %global cuda_home /usr/local/cuda-12
-%else
-%global cuda_home /usr/local/cuda-13
-%endif
-
-%global cuda_arches 75;80;86;89;90;90a;120
+%global cuda_arches 61;70;75
+%global cuda_toolkit_pkg cuda-toolkit-12-9
 
 # Do not generate debuginfo/debugsource subpackages.
 %global debug_package %{nil}
@@ -34,17 +32,21 @@ BuildRequires:  cmake >= 3.14
 BuildRequires:  gcc-c++
 BuildRequires:  libcurl-devel
 BuildRequires:  openssl-devel
+# NCCL is deliberately disabled by default: a floating libnccl-devel can
+# pull a CUDA 13 build from the mixed NVIDIA repository. Enable only if a
+# matching CUDA 12.9 NCCL package is explicitly provisioned.
+%bcond_with nccl
+%if %{with nccl}
 BuildRequires:  libnccl-devel
-
-# CUDA toolkit / nvcc.
-# Adjust the package name if your CUDA repository uses different names.
-%if 0%{?rhel} <= 9
-BuildRequires:  cuda-toolkit-12-9
-%else
-BuildRequires:  cuda-toolkit-13-1
+Requires:       libnccl%{?_isa}
 %endif
 
-Requires:       nvidia-driver-cuda-libs libcublas cuda-cudart libnccl%{?_isa}
+BuildRequires:  %{cuda_toolkit_pkg}
+
+# Versioned runtime dependencies avoid accidentally selecting CUDA 13.
+# Install a compatible NVIDIA GPU driver separately (R580 for SM61/SM70).
+Requires:       cuda-cudart-12-9
+Requires:       libcublas-12-9
 
 
 %description
@@ -74,12 +76,24 @@ Test binaries for %{name}.
 %autosetup -p1 -n %{name}-%{upstream_version}
 
 %build
+# Abort early if a CUDA 13 nvcc/toolkit is accidentally selected.
+test -x %{cuda_home}/bin/nvcc || { echo 'CUDA 12.9 nvcc is missing' >&2; exit 1; }
+%{cuda_home}/bin/nvcc --version | grep -Eq 'release 12\.9([,.]|$)' || {
+  echo 'ERROR: CUDA 12.9 nvcc is required for SM61/70/75' >&2; exit 1;
+}
+%if %{with nccl}
+# A CUDA 13 NCCL library could be ABI-incompatible with CUDA 12.9.
+rpm -q --qf '%%{RELEASE}\n' libnccl-devel | grep -q '+cuda12\.9' || {
+  echo 'ERROR: --with nccl requires a CUDA 12.9 libnccl-devel build' >&2; exit 1;
+}
+%endif
 export CUDA_HOME=%{cuda_home}
+export CUDACXX=%{cuda_home}/bin/nvcc
 export PATH=%{cuda_home}/bin:$PATH
 export LD_LIBRARY_PATH=%{cuda_home}/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
 # AlmaLinux/RHEL RPM builds link executables with hardened PIE defaults.
-# With CUDA 13, CMake's CUDA compiler probe can fail at link time unless
+# CMake's CUDA compiler probe can fail at link time unless
 # nvcc forwards PIC-compatible host flags explicitly.
 # Pass -fPIC through nvcc to the host compiler so CUDA try-compile and
 # normal object builds are compatible with the hardened linker setup.
@@ -109,11 +123,16 @@ rm -rf build/*
 
 cmake -B build \
   -DGGML_CUDA=ON \
+%if %{with nccl}
   -DGGML_CUDA_NCCL=ON \
+%else
+  -DGGML_CUDA_NCCL=OFF \
+%endif
   -DGGML_NATIVE=OFF \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_CUDA_ARCHITECTURES="%{cuda_arches}" \
   -DCMAKE_CUDA_COMPILER=%{cuda_home}/bin/nvcc \
+  -DCUDAToolkit_ROOT=%{cuda_home} \
   -DCMAKE_BUILD_TYPE=Release \
   -DGGML_CUDA_FA_ALL_QUANTS=ON \
   -DGGML_RPC=ON \
